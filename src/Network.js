@@ -6,8 +6,11 @@ const EventEmitter = require('events');
 const _ = require('lodash');
 
 const Functions = require('./Activation');
+const FileOps = require('./FileOps');
 const Matrix = require('./lib/Matrix');
 const Segue = require('./lib/Segue');
+
+const ProgressBar = require('./ProgressBar');
 
 class Network {
   constructor({
@@ -40,51 +43,43 @@ class Network {
   }
 
   async train({
-    file,
+    data,
+    epochs = 1,
+    learningRate = 0.1,
+    showProgress = false,
+  }) {
+    if (_.isArray(data)) {
+      this.trainFromData({
+        data, epochs, learningRate, showProgress,
+      });
+    } else if (_.isString(data)) {
+      const fileType = data.split('.').pop();
+      if (fileType === 'json') {
+        const dataFromFile = JSON.parse(fs.readFileSync(data));
+        this.trainFromData({
+          data: dataFromFile, epochs, learningRate, showProgress,
+        });
+      } else if (fileType === 'ndjson') {
+        await this.trainFromFileStream({
+          file: data, epochs, learningRate, showProgress,
+        });
+      }
+    }
+  }
+
+  trainFromData({
     data,
     epochs = 1,
     learningRate = 0.1,
     dotProductFunc = Matrix.product,
+    showProgress = false,
   }) {
-    if (file) {
-      const fileExt = file.split('.').pop();
-      if (fileExt === 'json') {
-        const trainingData = JSON.parse(
-          fs.readFileSync(file),
-        );
-        this.trainFromFile({
-          trainingData,
-          epochs,
-          learningRate,
-          dotProductFunc,
-        });
-      } else if (fileExt === 'ndjson') {
-        await this.trainFromFileStream({
-          filename: file,
-          epochs,
-          learningRate,
-          dotProductFunc,
-        });
-      }
-    } else if (data) {
-      this.trainFromFile({
-        trainingData: data,
-        epochs,
-        learningRate,
-        dotProductFunc,
-      });
-    }
-  }
+    const progress = showProgress
+      ? new ProgressBar(epochs * data.length) : null;
 
-  trainFromFile({
-    trainingData,
-    epochs = 1,
-    learningRate = 0.1,
-    dotProductFunc = Matrix.product,
-  }) {
     const startTime = Date.now();
     for (let j = 0; j < epochs; j++) {
-      const shuffledData = _.shuffle(trainingData);
+      const shuffledData = _.shuffle(data);
 
       for (let i = 0; i < shuffledData.length; i++) {
         if (i % 1000 === 0) {
@@ -93,6 +88,8 @@ class Network {
             total: shuffledData.length,
           });
         }
+
+        if (showProgress) progress.update((data.length * j) + i + 1);
 
         this.backprop(
           shuffledData[i].input,
@@ -119,18 +116,24 @@ class Network {
   }
 
   async trainFromFileStream({
-    filename,
+    file,
     epochs = 1,
     learningRate = 0.1,
     dotProductFunc = Matrix.product,
+    showProgress = false,
   }) {
+    const lineCount = await FileOps.getLineCountInFile({ file });
+    const progress = showProgress
+      ? new ProgressBar(epochs * lineCount) : null;
+
     const startTime = Date.now();
     for (let j = 0; j < epochs; j++) {
-      const fileStream = fs.createReadStream(filename);
+      const fileStream = fs.createReadStream(file);
       const rl = Readline.createInterface({
         input: fileStream,
       });
 
+      let i = 0;
       for await (const line of rl) {
         // validation
         if (line.trim() !== '') {
@@ -139,6 +142,9 @@ class Network {
             point.input, point.output, learningRate, dotProductFunc,
           );
         }
+
+        if (showProgress) progress.update((lineCount * j) + i + 1);
+        i += 1;
       }
     }
     const endTime = Date.now();
@@ -263,33 +269,71 @@ class Network {
     return _.flatten(layerResult);
   }
 
+  // eslint-disable-next-line consistent-return
   async evaluate({
-    file,
+    data,
     func,
+    showProgress = false,
   }) {
-    const testData = JSON.parse(fs.readFileSync(file));
+    if (_.isArray(data)) {
+      return this.evaluateFromData({
+        data, func, showProgress,
+      });
+    }
+
+    if (_.isString(data)) {
+      const fileType = data.split('.').pop();
+      if (fileType === 'json') {
+        const dataFromFile = JSON.parse(fs.readFileSync(data));
+        return this.evaluateFromData({
+          data: dataFromFile, func, showProgress,
+        });
+      }
+
+      if (fileType === 'ndjson') {
+        return this.evaluateFromFileStream({
+          file: data, func, showProgress,
+        });
+      }
+    }
+  }
+
+  evaluateFromData({
+    data,
+    func,
+    showProgress,
+  }) {
+    const progress = showProgress
+      ? new ProgressBar(data.length) : null;
 
     let numCorrect = 0;
     let numIncorrect = 0;
-    for (let i = 0; i < testData.length; i++) {
-      const point = testData[i];
+    for (let i = 0; i < data.length; i++) {
+      const point = data[i];
       const prediction = this.predict(point.input);
       const isCorrect = func({ output: point.output, prediction });
       // eslint-disable-next-line no-unused-expressions, no-plusplus
       isCorrect ? numCorrect++ : numIncorrect++;
+
+      if (showProgress) progress.update(i + 1);
     }
 
     return {
-      numCorrect,
-      numIncorrect,
-      accuracyPrct: numCorrect / testData.length,
+      correct: numCorrect,
+      incorrect: numIncorrect,
+      accuracyPrct: (numCorrect / data.length) * 100,
     };
   }
 
   async evaluateFromFileStream({
     file,
     func,
+    showProgress = false,
   }) {
+    const lineCount = await FileOps.getLineCountInFile({ file });
+    const progress = showProgress
+      ? new ProgressBar(lineCount) : null;
+
     const fileStream = fs.createReadStream(file);
     const rl = Readline.createInterface({
       input: fileStream,
@@ -297,6 +341,7 @@ class Network {
 
     let numCorrect = 0;
     let numIncorrect = 0;
+    let i = 0;
     for await (const line of rl) {
       if (line.trim() !== '') {
         const point = JSON.parse(line);
@@ -305,19 +350,21 @@ class Network {
         // eslint-disable-next-line no-unused-expressions, no-plusplus
         isCorrect ? numCorrect++ : numIncorrect++;
       }
+      if (showProgress) progress.update(i + 1);
+      i += 1;
     }
 
     return {
-      numCorrect,
-      numIncorrect,
-      accuracyPrct: numCorrect / (numCorrect + numIncorrect),
+      correct: numCorrect,
+      incorrect: numIncorrect,
+      accuracyPrct: (numCorrect / (numCorrect + numIncorrect)) * 100,
     };
   }
 
-  save() {
-    return {
+  saveToFile({ file }) {
+    fs.writeFileSync(file, JSON.stringify({
       ...this,
-    };
+    }));
   }
 }
 
