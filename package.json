@@ -1,7 +1,7 @@
 {
   "name": "stitch-ml",
   "description": "An experimental machine learning library written in Javascript.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "Chandler Freeman (https://github.com/thespychief)",
   "license": "MIT",
   "keywords": [
