@@ -1,87 +1,117 @@
 /* eslint-disable no-undef */
-const fs = require('fs');
-const _ = require('lodash');
-const Network = require('../src/Network');
+const lodash = require('lodash');
+const StitchML = require('../src/index');
 
-const trainingData = JSON.parse(
-  fs.readFileSync('./test/data/mnist_train.json'),
-);
+test('train and evaluate from object', async () => {
+  const xor = [
+    { input: [0, 0], output: [0] },
+    { input: [0, 1], output: [1] },
+    { input: [1, 0], output: [1] },
+    { input: [1, 1], output: [0] },
+  ];
 
-const testData = JSON.parse(
-  fs.readFileSync('./test/data/mnist_test.json'),
-);
-
-test('train and save', () => {
-  const structure = [784, 100, 10];
-  const network = new Network({
-    structure,
+  const network = new StitchML.Network({
+    structure: [2, 4, 1],
   });
 
-  network.train({ data: trainingData, epochs: 1 });
-  const trainedNetwork = network.save();
+  await network.train({ data: xor, epochs: 50000 });
 
-  fs.writeFileSync('./test/data/mnist_network.json', JSON.stringify(
-    trainedNetwork,
-  ));
+  const results = await network.evaluate({
+    data: xor,
+    func: ({ output, prediction }) => (Math.round(prediction[0]) === output[0]),
+  });
 
-  expect(trainedNetwork.structure).toEqual(structure);
+  expect(results.correct).toEqual(4);
+  expect(results.incorrect).toEqual(0);
+  expect(results.accuracyPrct).toEqual(100);
 });
 
-test('load and evaluate', () => {
-  const model = JSON.parse(fs.readFileSync('./test/data/mnist_network.json'));
-  const network = new Network(model);
+test('train and evaluate from json file', async () => {
+  const network = new StitchML.Network({
+    structure: [2, 4, 1],
+  });
 
-  const results = [];
-  for (let i = 0; i < testData.length; i++) {
-    const point = testData[i];
-    const prediction = network.predict(point.input);
-    results.push([
-      _.indexOf(prediction, _.max(prediction)),
-      _.indexOf(point.output, _.max(point.output)),
-    ]);
-  }
+  await network.train({ data: './test/data/xor.json', epochs: 50000 });
 
-  const matches = results.filter((arr) => _.isEqual(arr[0], arr[1]));
+  const results = await network.evaluate({
+    data: './test/data/xor.json',
+    func: ({ output, prediction }) => (Math.round(prediction[0]) === output[0]),
+  });
 
-  const numMatches = matches.length;
-  const accuracy = matches.length / results.length;
+  expect(results.correct).toEqual(4);
+  expect(results.incorrect).toEqual(0);
+  expect(results.accuracyPrct).toEqual(100);
+});
 
-  expect(numMatches).toBeGreaterThanOrEqual(9200);
-  expect(numMatches).toBeLessThan(9800);
+jest.setTimeout(10000);
+test('train and evaluate from ndjson file', async () => {
+  const network = new StitchML.Network({
+    structure: [2, 4, 1],
+  });
 
-  expect(accuracy).toBeGreaterThanOrEqual(0.92);
-  expect(accuracy).toBeLessThan(0.98);
+  await network.train({ data: './test/data/xor.ndjson', epochs: 50000 });
+
+  const results = await network.evaluate({
+    data: './test/data/xor.ndjson',
+    func: ({ output, prediction }) => (Math.round(prediction[0]) === output[0]),
+  });
+
+  expect(results.correct).toEqual(4);
+  expect(results.incorrect).toEqual(0);
+  expect(results.accuracyPrct).toEqual(100);
+});
+
+test('train, save, load, and evaluate', async () => {
+  const xor = [
+    { input: [0, 0], output: [0] },
+    { input: [0, 1], output: [1] },
+    { input: [1, 0], output: [1] },
+    { input: [1, 1], output: [0] },
+  ];
+
+  const network = new StitchML.Network({
+    structure: [2, 4, 1],
+  });
+
+  await network.train({ data: xor, epochs: 50000 });
+
+  network.saveToFile({ file: './test/data/xor.net.json' });
+
+  const networkFromFile = new StitchML.Network(
+    StitchML.FileOps.loadModel({ file: './test/data/xor.net.json' }),
+  );
+
+  const results = await networkFromFile.evaluate({
+    data: xor,
+    func: ({ output, prediction }) => (Math.round(prediction[0]) === output[0]),
+  });
+
+  expect(results.correct).toEqual(4);
+  expect(results.incorrect).toEqual(0);
+  expect(results.accuracyPrct).toEqual(100);
 });
 
 jest.setTimeout(300000);
-test('train from file and evaluate', async () => {
-  const structure = [784, 100, 10];
-  const network = new Network({
-    structure,
+test('train and evaluate mnist', async () => {
+  const network = new StitchML.Network({
+    structure: [784, 100, 10],
   });
 
   await network.train({
-    file: './test/data/mnist_train.ndjson', epochs: 1,
+    data: './test/data/mnist_train.json',
+    showProgress: true,
   });
 
-  const results = [];
-  for (let i = 0; i < testData.length; i++) {
-    const point = testData[i];
-    const prediction = network.predict(point.input);
-    results.push([
-      _.indexOf(prediction, _.max(prediction)),
-      _.indexOf(point.output, _.max(point.output)),
-    ]);
-  }
+  const results = await network.evaluate({
+    data: './test/data/mnist_test.json',
+    func: ({ output, prediction }) => lodash.isEqual(
+      lodash.indexOf(prediction, lodash.max(prediction)),
+      lodash.indexOf(output, lodash.max(output)),
+    ),
+    showProgress: true,
+  });
 
-  const matches = results.filter((arr) => _.isEqual(arr[0], arr[1]));
-
-  const numMatches = matches.length;
-  const accuracy = matches.length / results.length;
-
-  expect(numMatches).toBeGreaterThanOrEqual(9200);
-  expect(numMatches).toBeLessThan(9800);
-
-  expect(accuracy).toBeGreaterThanOrEqual(0.92);
-  expect(accuracy).toBeLessThan(0.98);
+  expect(results.correct).toBeGreaterThan(9000);
+  expect(results.incorrect).toBeLessThan(1000);
+  expect(results.accuracyPrct).toBeGreaterThan(90);
 });

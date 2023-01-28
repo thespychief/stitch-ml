@@ -1,4 +1,21 @@
 const fs = require('fs');
+const Readline = require('readline');
+
+const loadModel = ({ file }) => JSON.parse(fs.readFileSync(file));
+
+const getLineCountInFile = async ({ file }) => {
+  const readInterface = Readline.createInterface({
+    input: fs.createReadStream(file),
+  });
+
+  let lineCount = 0;
+  // eslint-disable-next-line no-restricted-syntax, no-unused-vars
+  for await (const line of readInterface) {
+    // eslint-disable-next-line no-plusplus
+    lineCount++;
+  }
+  return lineCount;
+};
 
 class Writer {
   constructor({
@@ -29,4 +46,4 @@ class Writer {
   }
 }
 
-module.exports = { Writer };
+module.exports = { Writer, loadModel, getLineCountInFile };
